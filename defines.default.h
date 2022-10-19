@@ -64,6 +64,21 @@ enum MODE {
   UNKNOWN,
   BYPASS,
   OFFSET,
-  FIXED
+  FIXED,
+  OFFSET_WITH_MAX
 };
-const char* modeNames[] = { "UNKNOWN", "BYPASS", "OFFSET", "FIXED" };
+const char* modeNames[] = { "UNKNOWN", "BYPASS", "OFFSET", "FIXED", "OFFSET_WITH_MAX" };
+
+#define EEADDR 0
+
+struct StoreData_s {
+  MODE currentMode;
+  int offsetTemp;
+  int fixedTemp;
+};
+
+StoreData_s StoreData = {
+  BYPASS,
+  5,
+  16
+};

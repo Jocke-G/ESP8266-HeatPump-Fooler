@@ -2,6 +2,7 @@
 #include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
+#include <ESP_EEPROM.h>
 
 #if ONEWIRE_ENABLED
   #include <OneWire.h>
@@ -32,17 +33,12 @@ SteinhartHart steinhart = SteinhartHart(A, B, C);
 WiFiClient wifi;
 PubSubClient mqtt;
 
-MODE currentMode = BYPASS; // BYPASS OFFSET FIXED
-int offsetTemp = -2;
-int fixedTemp = 25;
-int workInterval = WORK_INTERVAL;
-
 void mqttDataCallback(char* topic, byte* payload, unsigned int length) {
   if(DEBUG_PRINT_SERIAL) {
     Serial.println("=== MQTT Message Received! ===");
     Serial.print("\tTopic: \t");
     Serial.println(topic);
-    Serial.print("\tMessage: \t");
+    Serial.println("\tMessage:");
     
     payload[length] = '\0';
     String s = String((char*)payload);
@@ -70,44 +66,62 @@ void mqttDataCallback(char* topic, byte* payload, unsigned int length) {
     DynamicJsonDocument doc(1024);
     DeserializationError err = deserializeJson(doc, payload);
     if (err) {
-      Serial.print(F("deserializeJson() failed with code "));
-      Serial.println(err.f_str());
+      if(DEBUG_PRINT_SERIAL) {
+        Serial.print(F("deserializeJson() failed with code "));
+        Serial.println(err.f_str());
+      }
+      return;
     }
     JsonArray arr = doc["metrics"];
     for (JsonObject repo : arr) {
       const char* name = repo["name"];
-      Serial.print("Metric name:" );
-      Serial.println(name);
+      if(DEBUG_PRINT_SERIAL) {
+        Serial.print("Metric name: ");
+        Serial.println(name);
+      }
       if(strcmp(name, "Mode") == 0) {
         if(strcmp(repo["value"], "FIXED") == 0) {
-            currentMode = FIXED;
+          StoreData.currentMode = FIXED;
         }
         else if(strcmp(repo["value"], "OFFSET") == 0)
         {
-          currentMode = OFFSET;
+          StoreData.currentMode = OFFSET;
         }
         else if(strcmp(repo["value"], "BYPASS") == 0)
         {
-            currentMode = BYPASS;
+          StoreData.currentMode = BYPASS;
         }
-        Serial.print("New Mode:" );
-        Serial.println(currentMode);
+        else if(strcmp(repo["value"], "OFFSET_WITH_MAX") == 0)
+        {
+          StoreData.currentMode = OFFSET_WITH_MAX;
+        }
+        if(DEBUG_PRINT_SERIAL) {
+          Serial.print("New Mode: ");
+          Serial.println(StoreData.currentMode);
+        }
       }
       if(strcmp(name, "OffsetTemp") == 0) {
-        offsetTemp = String(repo["value"]).toInt();
-        Serial.print("New OffsetTemp:" );
-        Serial.println(offsetTemp);
+        StoreData.offsetTemp = String(repo["value"]).toInt();
+        if(DEBUG_PRINT_SERIAL) {
+          Serial.print("New OffsetTemp: ");
+          Serial.println(StoreData.offsetTemp);
+        }
       }
       if(strcmp(name, "FixedTemp") == 0) {
-        fixedTemp = String(repo["value"]).toInt();
-        Serial.print("New FixedTemp:" );
-        Serial.println(fixedTemp);
+        StoreData.fixedTemp = String(repo["value"]).toInt();
+        if(DEBUG_PRINT_SERIAL) {
+          Serial.print("New FixedTemp: ");
+          Serial.println(StoreData.fixedTemp);
+        }
       }
-      if(strcmp(name, "WorkInterval") == 0) {
-        workInterval = String(repo["value"]).toInt();
-        Serial.print("New WorkInterval:" );
-        Serial.println(workInterval);
-      }
+    }
+    if(DEBUG_PRINT_SERIAL) {
+      Serial.println("Saving to EEPROM");
+    }
+    EEPROM.put(EEADDR, StoreData);
+    boolean ok = EEPROM.commit();
+    if(DEBUG_PRINT_SERIAL) {
+      Serial.println((ok) ? "Commit OK" : "Commit failed");
     }
     workNow = true;
   }
@@ -145,8 +159,15 @@ void mqttConnectedCallback() {
 void setup() {
   if(DEBUG_PRINT_SERIAL) {
     Serial.begin(SERIAL_BAUDRATE);
-    while(!Serial) { }
     Serial.println("\n=== setup() ===");
+    Serial.println("Getting from EEPROM");
+  }
+  EEPROM.begin(sizeof(StoreData));
+  EEPROM.get(EEADDR, StoreData);
+
+  if(DEBUG_PRINT_SERIAL) {
+    Serial.print("Mode: ");
+    Serial.println(StoreData.currentMode);
   }
   mqtt.setBufferSize(1024);
 
@@ -168,14 +189,16 @@ void setupWifi() {
   configureWiFi();
 
   if(DEBUG_PRINT_SERIAL) {
-    Serial.print("\tNew hostname: ");
+    Serial.print("\tActual hostname: ");
     Serial.println(WiFi.hostname());
   }
 
+  int i = 0;
   while (WiFi.waitForConnectResult() != WL_CONNECTED) {
     if(DEBUG_PRINT_SERIAL) {
-      Serial.print(".");
+      Serial.printf("%05d: (connecting wifi...)\n", i);
     }
+    i++;
     delay(500);
   }
   
@@ -189,6 +212,7 @@ void setupWifi() {
 }
 
 void configureWiFi() {
+  WiFi.persistent(false);
   WiFi.hostname(WIFI_HOSTNAME);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -273,7 +297,7 @@ void loop() {
     lastHeartbeatMillis = millis();
   }
 
-  if(workNow || lastWorkMillis == 0 || (lastWorkMillis + (workInterval * 1000)) <= millis()) {
+  if(workNow || lastWorkMillis == 0 || (lastWorkMillis + (WORK_INTERVAL * 1000)) <= millis()) {
     lastWorkMillis = millis();
     workNow = false;
     work();
@@ -310,8 +334,13 @@ void work() {
 #endif
 
   digitalWrite(THERMISTOR_VCC_PIN, turn_On);
-  delay(20);
-  float analogReading = analogRead(THERMISTORPIN);
+  delay(50);
+  int analogReading = 0;
+  for (int i=0; i < 5; i++) {
+    analogReading = analogReading + analogRead(THERMISTORPIN);
+  }
+  analogReading = analogReading/5;
+ 
   digitalWrite(THERMISTOR_VCC_PIN, turn_Off);
   createMetric(metrics, "AnalogReading", analogReading);
   if(DEBUG_PRINT_SERIAL) {
@@ -347,22 +376,22 @@ void work() {
     Serial.println(steinhartHartTemperature);
  }
 
-  createMetric(metrics, "Mode", modeNames[currentMode]);
+  createMetric(metrics, "Mode", modeNames[StoreData.currentMode]);
   if(DEBUG_PRINT_SERIAL) {
     Serial.print("Current Mode: ");
-    Serial.println(modeNames[currentMode]);
+    Serial.println(modeNames[StoreData.currentMode]);
   }
 
-  createMetric(metrics, "FixedTemp", fixedTemp);
+  createMetric(metrics, "FixedTemp", StoreData.fixedTemp);
   if(DEBUG_PRINT_SERIAL) {
     Serial.print("Fixed Temp: ");
-    Serial.println(fixedTemp);
+    Serial.println(StoreData.fixedTemp);
   }
 
-  createMetric(metrics, "OffsetTemp", offsetTemp);
+  createMetric(metrics, "OffsetTemp", StoreData.offsetTemp);
   if(DEBUG_PRINT_SERIAL) {
     Serial.print("OffsetTemp: ");
-    Serial.println(offsetTemp);
+    Serial.println(StoreData.offsetTemp);
   }
 
   float targetTemperature = calculateTargetTemperature(steinhartHartTemperature);
@@ -409,21 +438,30 @@ void work() {
   Serial.print("Payload:");
   Serial.println(message);
 
-  mqtt.publish(MQTT_DDATA_TOPIC, message.c_str());
+  if(!mqtt.publish(MQTT_DDATA_TOPIC, message.c_str())){
+    if(DEBUG_PRINT_SERIAL) {
+      Serial.println("Failed to send DDATA");
+    }
+  }
 }
 
 float calculateTargetTemperature(float temperature) {
   float targetTemperature;
-  switch(currentMode) {
+  switch(StoreData.currentMode) {
     case FIXED:
-      return fixedTemp;
-      break;
+      return StoreData.fixedTemp;
     case OFFSET:
-      return temperature + offsetTemp;
-      break;
+      return temperature + StoreData.offsetTemp;
+    case OFFSET_WITH_MAX:
+      if(temperature >= StoreData.fixedTemp) {
+        return temperature;
+      }else if(temperature + StoreData.offsetTemp >= StoreData.fixedTemp) {
+        return StoreData.fixedTemp;
+      } else {
+        return temperature + StoreData.offsetTemp;
+      }
     case BYPASS:
     default:
       return temperature;
-      break;
   }
 }

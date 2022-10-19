@@ -26,5 +26,4 @@ class MCP41X1 {
     void writeSteps(int value);
     float getResistancePerStep();
 };
-
 #endif
