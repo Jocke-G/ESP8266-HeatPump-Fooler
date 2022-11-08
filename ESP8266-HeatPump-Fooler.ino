@@ -1,7 +1,5 @@
-#include <Arduino.h>
-#include <ArduinoJson.h>
-#include <ESP8266WiFi.h>
-#include <PubSubClient.h>
+#include "defines.h"
+
 #include <ESP_EEPROM.h>
 
 #if ONEWIRE_ENABLED
@@ -9,10 +7,9 @@
   #include <DallasTemperature.h>
 #endif
 
-#include "defines.h"
 #include "MCP41X1.h"
-#include "SparkPlug_B.h"
 #include "thermistor.h"
+#include "SparkPlugDevice.h"
 
 MCP41X1 digiPot = MCP41X1(CS_PIN, MAX_OHMS, WIPER_RESISTANCE, POT_STEPS);
 
@@ -21,139 +18,79 @@ MCP41X1 digiPot = MCP41X1(CS_PIN, MAX_OHMS, WIPER_RESISTANCE, POT_STEPS);
   DallasTemperature sensors(&oneWire);
 #endif
 
-void mqttDataCallback(char* topic, byte* payload, unsigned int length);
+void deviceCommandCallback(char* payload);
+void connectedCallback();
 
 int lastWorkMillis = 0;
 int lastHeartbeatMillis = 0;
 bool workNow = false;
-boolean pendingDisconnect = true;
 
-SteinhartHart steinhart = SteinhartHart(A, B, C);
+SteinhartHart steinhart = SteinhartHart(CONST_A, CONST_B, CONST_C);
 
-WiFiClient wifi;
-PubSubClient mqtt;
+SparkPlugDevice device;
 
-void mqttDataCallback(char* topic, byte* payload, unsigned int length) {
-  if(DEBUG_PRINT_SERIAL) {
-    Serial.println("=== MQTT Message Received! ===");
-    Serial.print("\tTopic: \t");
-    Serial.println(topic);
-    Serial.println("\tMessage:");
-    
-    payload[length] = '\0';
-    String s = String((char*)payload);
-    Serial.println(s);
-  }
-
-  String strTopic = String(topic);
-  if (strTopic.equals(MQTT_STATUS_REQUEST_TOPIC)) {
-    String response = String("IP:");
-    response += WiFi.localIP().toString();
+void deviceCommandCallback(char* payload) {
+  DynamicJsonDocument doc(1024);
+  DeserializationError err = deserializeJson(doc, payload);
+  if (err) {
     if(DEBUG_PRINT_SERIAL) {
-      Serial.println("Publish Technical Status Report");
-      Serial.print("\tTopic: \t");
-      Serial.println(MQTT_STATUS_RESPONSE_TOPIC);
-      Serial.print("\tMessage: \t");
-      Serial.println(response);
+      Serial.print(F("deserializeJson() failed with code "));
+      Serial.println(err.f_str());
     }
-    mqtt.publish(MQTT_STATUS_RESPONSE_TOPIC, response.c_str());
+    return;
   }
-
-  if (strTopic.equals(MQTT_DCMD_TOPIC)) {
+  JsonArray arr = doc["metrics"];
+  for (JsonObject repo : arr) {
+    const char* name = repo["name"];
     if(DEBUG_PRINT_SERIAL) {
-      Serial.println("Received DCMD - Device Command");
+      Serial.print("Metric name: ");
+      Serial.println(name);
     }
-    DynamicJsonDocument doc(1024);
-    DeserializationError err = deserializeJson(doc, payload);
-    if (err) {
+    if(strcmp(name, "Mode") == 0) {
+      if(strcmp(repo["value"], "FIXED") == 0) {
+        StoreData.currentMode = FIXED;
+      }
+      else if(strcmp(repo["value"], "OFFSET") == 0)
+      {
+        StoreData.currentMode = OFFSET;
+      }
+      else if(strcmp(repo["value"], "BYPASS") == 0)
+      {
+        StoreData.currentMode = BYPASS;
+      }
+      else if(strcmp(repo["value"], "OFFSET_WITH_MAX") == 0)
+      {
+        StoreData.currentMode = OFFSET_WITH_MAX;
+      }
       if(DEBUG_PRINT_SERIAL) {
-        Serial.print(F("deserializeJson() failed with code "));
-        Serial.println(err.f_str());
+        Serial.print("New Mode: ");
+        Serial.println(StoreData.currentMode);
       }
-      return;
     }
-    JsonArray arr = doc["metrics"];
-    for (JsonObject repo : arr) {
-      const char* name = repo["name"];
+    if(strcmp(name, "OffsetTemp") == 0) {
+      StoreData.offsetTemp = String(repo["value"]).toInt();
       if(DEBUG_PRINT_SERIAL) {
-        Serial.print("Metric name: ");
-        Serial.println(name);
-      }
-      if(strcmp(name, "Mode") == 0) {
-        if(strcmp(repo["value"], "FIXED") == 0) {
-          StoreData.currentMode = FIXED;
-        }
-        else if(strcmp(repo["value"], "OFFSET") == 0)
-        {
-          StoreData.currentMode = OFFSET;
-        }
-        else if(strcmp(repo["value"], "BYPASS") == 0)
-        {
-          StoreData.currentMode = BYPASS;
-        }
-        else if(strcmp(repo["value"], "OFFSET_WITH_MAX") == 0)
-        {
-          StoreData.currentMode = OFFSET_WITH_MAX;
-        }
-        if(DEBUG_PRINT_SERIAL) {
-          Serial.print("New Mode: ");
-          Serial.println(StoreData.currentMode);
-        }
-      }
-      if(strcmp(name, "OffsetTemp") == 0) {
-        StoreData.offsetTemp = String(repo["value"]).toInt();
-        if(DEBUG_PRINT_SERIAL) {
-          Serial.print("New OffsetTemp: ");
-          Serial.println(StoreData.offsetTemp);
-        }
-      }
-      if(strcmp(name, "FixedTemp") == 0) {
-        StoreData.fixedTemp = String(repo["value"]).toInt();
-        if(DEBUG_PRINT_SERIAL) {
-          Serial.print("New FixedTemp: ");
-          Serial.println(StoreData.fixedTemp);
-        }
+        Serial.print("New OffsetTemp: ");
+        Serial.println(StoreData.offsetTemp);
       }
     }
-    if(DEBUG_PRINT_SERIAL) {
-      Serial.println("Saving to EEPROM");
+    if(strcmp(name, "FixedTemp") == 0) {
+      StoreData.fixedTemp = String(repo["value"]).toInt();
+      if(DEBUG_PRINT_SERIAL) {
+        Serial.print("New FixedTemp: ");
+        Serial.println(StoreData.fixedTemp);
+      }
     }
-    EEPROM.put(EEADDR, StoreData);
-    boolean ok = EEPROM.commit();
-    if(DEBUG_PRINT_SERIAL) {
-      Serial.println((ok) ? "Commit OK" : "Commit failed");
-    }
-    workNow = true;
   }
-}
-
-void mqttConnectedCallback() {
   if(DEBUG_PRINT_SERIAL) {
-    Serial.println("MQTT Connected");
+    Serial.println("Saving to EEPROM");
   }
-
+  EEPROM.put(EEADDR, StoreData);
+  boolean ok = EEPROM.commit();
   if(DEBUG_PRINT_SERIAL) {
-    Serial.println("Subscribing to Device Command");
-    Serial.print("\tTopic:\t");
-    Serial.println(MQTT_DCMD_TOPIC);
+    Serial.println((ok) ? "Commit OK" : "Commit failed");
   }
-  mqtt.subscribe(MQTT_DCMD_TOPIC);
-
-  if(DEBUG_PRINT_SERIAL) {
-    Serial.println("Subscribing to status message request");
-    Serial.print("\tTopic:\t");
-    Serial.println(MQTT_STATUS_REQUEST_TOPIC);
-  }
-  mqtt.subscribe(MQTT_STATUS_REQUEST_TOPIC);
-
-  if(DEBUG_PRINT_SERIAL) {
-    Serial.println("Publishing Connected message");
-    Serial.print("\tTopic:\t");
-    Serial.println(MQTT_CONNECTED_TOPIC);
-    Serial.print("\tMessage:\t");
-    Serial.println(MQTT_CONNECTED_MESSAGE);
-  }
-  mqtt.publish(MQTT_CONNECTED_TOPIC, MQTT_CONNECTED_MESSAGE);
+  workNow = true;
 }
 
 void setup() {
@@ -169,10 +106,16 @@ void setup() {
     Serial.print("Mode: ");
     Serial.println(StoreData.currentMode);
   }
-  mqtt.setBufferSize(1024);
 
-  setupWifi();
-  setupMqtt();
+  device.setLogging(DEBUG_PRINT_SERIAL);
+  device.setDeviceCommandCallback(deviceCommandCallback);
+  device.setConnectedCallback(connectedCallback);
+  device.setup(
+    WIFI_SSID, WIFI_PASSWORD,
+    MQTT_HOST, MQTT_PORT, MQTT_USERNAME, MQTT_PASSWORD,
+    SPARKPLUG_GROUP_ID, SPARKPLUG_NODE_ID, SPARKPLUG_DEVICE_ID
+  );
+
   digiPot.init();
   pinMode(THERMISTOR_VCC_PIN, OUTPUT);
   if(DEBUG_PRINT_SERIAL) {
@@ -180,117 +123,8 @@ void setup() {
   }
 }
 
-void setupWifi() {
-  if(DEBUG_PRINT_SERIAL) {
-    Serial.println("Connecting to WiFi");
-    printWiFiSettings();
-  }
-
-  configureWiFi();
-
-  if(DEBUG_PRINT_SERIAL) {
-    Serial.print("\tActual hostname: ");
-    Serial.println(WiFi.hostname());
-  }
-
-  int i = 0;
-  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    if(DEBUG_PRINT_SERIAL) {
-      Serial.printf("%05d: (connecting wifi...)\n", i);
-    }
-    i++;
-    delay(500);
-  }
-  
-  if(DEBUG_PRINT_SERIAL) {
-    Serial.println("\nWiFi Connected");
-    Serial.print("\tIP address:\t");
-    Serial.println(WiFi.localIP());
-    Serial.print("\tRRSI: ");
-    Serial.println(WiFi.RSSI());
-  }
-}
-
-void configureWiFi() {
-  WiFi.persistent(false);
-  WiFi.hostname(WIFI_HOSTNAME);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-}
-
-void printWiFiSettings() {
-    Serial.print("\tMAC:\t");
-    Serial.println(WiFi.macAddress());
-    Serial.print("\tSSID:\t");
-    Serial.println(WIFI_SSID);
-    Serial.print("\tDefault hostname: ");
-    Serial.println(WiFi.hostname());
-    Serial.print("\tWanted Hostname:\t");
-    Serial.println(WIFI_SSID);
-}
-
-void setupMqtt() {
-  mqtt.setClient(wifi);
-  mqtt.setServer(MQTT_HOST, MQTT_PORT);
-  mqtt.setBufferSize(1024);
-  mqtt.setCallback(mqttDataCallback);
-  if(DEBUG_PRINT_SERIAL) {
-    printMqttSettings();
-  }
-  connectMqtt();
-}
-
-void printMqttSettings() {
-  Serial.println("Connecting to MQTT");
-  Serial.print("\tHost:\t");
-  Serial.println(MQTT_HOST);
-  Serial.print("\tPort:\t");
-  Serial.println(MQTT_PORT);
-  Serial.print("\tClient ID:\t");
-  Serial.println(MQTT_CLIENT_ID);
-  Serial.print("\tUsername:\t");
-  Serial.println(MQTT_USERNAME);
-  Serial.print("\tLast Will Topic:\t");
-  Serial.println(MQTT_LAST_WILL_TOPIC);
-  Serial.print("\tLast Will Message:\t");
-  Serial.println(MQTT_LAST_WILL_MESSAGE);
-}
-
-void processNet() {
-  if (WiFi.status() == WL_CONNECTED) {
-    if (mqtt.connected()) {
-      mqtt.loop();
-    } else {
-      if(DEBUG_PRINT_SERIAL) {
-        Serial.println("WiFi Connected but MQTT Not connected. Connecting MQTT");
-      }
-      connectMqtt();
-    }
-  } else {
-    if (mqtt.connected()){
-      if(DEBUG_PRINT_SERIAL) {
-        Serial.print("WiFi Disconnected, Also disconnecting MQTT");
-      }
-      mqtt.disconnect();
-    }
-  }
-  if (!mqtt.connected() && !pendingDisconnect) {
-    pendingDisconnect = true;
-    if(DEBUG_PRINT_SERIAL) {
-      Serial.println("MQTT Disconnected");
-    }
-  }
-}
-
-void connectMqtt() {
-  if (mqtt.connect(MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD, MQTT_LAST_WILL_TOPIC, 1, false, MQTT_LAST_WILL_MESSAGE)) {
-    pendingDisconnect = false;
-    mqttConnectedCallback();
-  }
-}
-
 void loop() {
-  processNet();
+  device.loop();
 
   if(lastHeartbeatMillis == 0 || (lastHeartbeatMillis + (HEARTBEAT_INTERVAL * 1000)) <= millis()) {
     heartbeat();
@@ -305,14 +139,7 @@ void loop() {
 }
 
 void heartbeat() {
-  if(DEBUG_PRINT_SERIAL) {
-    Serial.println("=== heartbeat() ===");
-  }
-  if(!mqtt.publish(MQTT_HEARTBEAT_TOPIC, "alive")) {
-    if(DEBUG_PRINT_SERIAL) {
-      Serial.println("Failed to send heartbeat");
-    }
-  }
+  device.heartbeat();
 }
 
 void work() {
@@ -320,7 +147,19 @@ void work() {
     Serial.println("=== work() ===");
   }
 
-  StaticJsonDocument<1024> doc;
+  device.publishDeviceData(readAndAdjust());
+}
+
+void connectedCallback() {
+  if(DEBUG_PRINT_SERIAL) {
+    Serial.println("=== connected() ===");
+  }
+  device.publishDeviceBirth(readAndAdjust());  
+}
+
+DynamicJsonDocument readAndAdjust() {
+
+  DynamicJsonDocument doc(1024);
   JsonArray metrics = doc.createNestedArray("metrics");
 
 #if ONEWIRE_ENABLED
@@ -431,18 +270,7 @@ void work() {
 
   digiPot.writeSteps(digiPotStep);
 
-  String message = "";
-  serializeJson(doc, message);
-  Serial.print("Sending MQTT message on topic:");
-  Serial.println(MQTT_DDATA_TOPIC);
-  Serial.print("Payload:");
-  Serial.println(message);
-
-  if(!mqtt.publish(MQTT_DDATA_TOPIC, message.c_str())){
-    if(DEBUG_PRINT_SERIAL) {
-      Serial.println("Failed to send DDATA");
-    }
-  }
+  return doc;
 }
 
 float calculateTargetTemperature(float temperature) {

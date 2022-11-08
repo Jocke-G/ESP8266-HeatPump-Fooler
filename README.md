@@ -55,4 +55,7 @@ Topic: HeatpumpFooler/DCMD
 
 [ArduinoJson.h](https://www.arduino.cc/reference/en/libraries/arduinojson/) [Official Webpage](https://arduinojson.org/)
 
-[PubSubClient.h](https://www.arduino.cc/reference/en/libraries/pubsubclient/) [Official Webpage](https://pubsubclient.knolleary.net/api)
+[PubSubClient.h](https://www.arduino.cc/reference/en/libraries/pubsubclient/) [Git repo](https://github.com/knolleary/pubsubclient) [Official Webpage](https://pubsubclient.knolleary.net/api)
+
+https://www.arduino.cc/reference/en/libraries/esp_eeprom/
+https://github.com/jwrw/ESP_EEPROM
