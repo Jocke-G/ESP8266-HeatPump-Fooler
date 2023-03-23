@@ -9,6 +9,10 @@ This project comes with NO WARRANTY OF ANY KIND
 ## Bill of Material
 
 Wemos D1 Mini (ESP8266)
+OR
+
+[ESP32](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/hw-reference/esp32/get-started-devkitc.html)
+
 NTC 150 Thermistor
 MCP4151-502E/P Digital Potentiometer
 
@@ -59,3 +63,11 @@ Topic: HeatpumpFooler/DCMD
 
 https://www.arduino.cc/reference/en/libraries/esp_eeprom/
 https://github.com/jwrw/ESP_EEPROM
+
+## To Do
+
+### Persistent memory
+
+For ESP8266, [ESP_EEPROM](https://github.com/jwrw/ESP_EEPROM) is used. For ESP32, [EEPROM](https://github.com/espressif/arduino-esp32/tree/master/libraries/EEPROM) is used, which has a compatible same signarure. But, ESP32 EEPROM is deprecated, replaced by [Preferences](https://github.com/espressif/arduino-esp32/tree/master/libraries/Preferences). Find out what to do.
+
+### OTA

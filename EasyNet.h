@@ -2,7 +2,13 @@
 #define EASY_NET_H
 
 #include <Arduino.h>
+
+#if defined(ESP32)
+#include <WiFi.h>
+#elif defined(ESP8266)
 #include <ESP8266WiFi.h>
+#endif
+
 #include <PubSubClient.h>
 #include <functional>
 
@@ -72,7 +78,12 @@ class EasyNet {
      */
     void loopWifi();
 
+#if defined(ESP32)
+    WiFiClass getWifi();
+#elif defined(ESP8266)
     ESP8266WiFiClass getWifi();
+#endif
+
     bool isWifiConnected();
     wl_status_t getWifiStatus();
     String getWifiStatusString();

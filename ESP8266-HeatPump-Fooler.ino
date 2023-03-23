@@ -1,17 +1,23 @@
 #include "defines.h"
 
-#include <ESP_EEPROM.h>
+#if defined(ESP32)
+#include <EEPROM.h> // https://github.com/espressif/arduino-esp32/tree/master/libraries/EEPROM
+#elif defined(ESP8266)
+#include <ESP_EEPROM.h> // https://github.com/jwrw/ESP_EEPROM
+#endif
 
 #if ONEWIRE_ENABLED
   #include <OneWire.h>
   #include <DallasTemperature.h>
 #endif
 
+#include "MCP_ADC.h" // https://github.com/RobTillaart/MCP_ADC
 #include "MCP41X1.h"
 #include "thermistor.h"
 #include "SparkPlugDevice.h"
 
-MCP41X1 digiPot = MCP41X1(CS_PIN, MAX_OHMS, WIPER_RESISTANCE, POT_STEPS);
+MCP41X1 digiPot = MCP41X1(CS_PIN, POT_STEPS, WIPER_RESISTANCE, MAX_RESISTANCE);
+MCP3202 mcp1;
 
 #if ONEWIRE_ENABLED
   OneWire oneWire(ONEWIRE_PIN);
@@ -68,14 +74,14 @@ void deviceCommandCallback(char* payload) {
       }
     }
     if(strcmp(name, "OffsetTemp") == 0) {
-      StoreData.offsetTemp = String(repo["value"]).toInt();
+      StoreData.offsetTemp = repo["value"];
       if(DEBUG_PRINT_SERIAL) {
         Serial.print("New OffsetTemp: ");
         Serial.println(StoreData.offsetTemp);
       }
     }
     if(strcmp(name, "FixedTemp") == 0) {
-      StoreData.fixedTemp = String(repo["value"]).toInt();
+      StoreData.fixedTemp = repo["value"];
       if(DEBUG_PRINT_SERIAL) {
         Serial.print("New FixedTemp: ");
         Serial.println(StoreData.fixedTemp);
@@ -96,12 +102,35 @@ void deviceCommandCallback(char* payload) {
 void setup() {
   if(DEBUG_PRINT_SERIAL) {
     Serial.begin(SERIAL_BAUDRATE);
-    Serial.println("\n=== setup() ===");
+    Serial.println("\n=== Setup ===");
+    Serial.printf("ONEWIRE_PIN:\t%d\n\r", ONEWIRE_PIN);
+    Serial.printf("THERMISTORPIN:\t%d\n\r", THERMISTORPIN);
+    Serial.printf("ADC_BITS:\t%d\n\r", ADC_BITS);
+    Serial.printf("ADC_MAX:\t%.f\n\r", ADC_MAX);
+
+    Serial.printf("MOSI: \t%d\n\r", MOSI);
+    Serial.printf("MISO: \t%d\n\r",MISO);
+    Serial.printf("SCK: \t%d\n\r", SCK);
+    Serial.printf("SS: \t%d\n\r", SS);
+
     Serial.println("Getting from EEPROM");
   }
+
+  mcp1.selectVSPI();
+  mcp1.begin(ADC_CS_PIN);
+  mcp1.setSPIspeed(4000000);
+
+  Serial.println("ADC\tCHANNELS\tMAXVALUE");
+  Serial.printf("mcp1\t%d\t\t%d\n\r", mcp1.channels(), mcp1.maxValue());
+
+  analogReadResolution(ADC_BITS);
+
   EEPROM.begin(sizeof(StoreData));
   EEPROM.get(EEADDR, StoreData);
 
+  if(StoreData.currentMode == -1) {
+    StoreData.currentMode = BYPASS;
+  }
   if(DEBUG_PRINT_SERIAL) {
     Serial.print("Mode: ");
     Serial.println(StoreData.currentMode);
@@ -117,7 +146,6 @@ void setup() {
   );
 
   digiPot.init();
-  pinMode(THERMISTOR_VCC_PIN, OUTPUT);
   if(DEBUG_PRINT_SERIAL) {
     Serial.println("Setup Completed");
   }
@@ -126,7 +154,7 @@ void setup() {
 void loop() {
   device.loop();
 
-  if(lastHeartbeatMillis == 0 || (lastHeartbeatMillis + (HEARTBEAT_INTERVAL * 1000)) <= millis()) {
+  if(HEARTBEAT_INTERVAL > 0 && (lastHeartbeatMillis == 0 || (lastHeartbeatMillis + (HEARTBEAT_INTERVAL * 1000)) <= millis())) {
     heartbeat();
     lastHeartbeatMillis = millis();
   }
@@ -167,27 +195,36 @@ DynamicJsonDocument readAndAdjust() {
   float oneWireTemperature = sensors.getTempCByIndex(0);
   createMetric(metrics, "OneWireTemperature", oneWireTemperature);
   if(DEBUG_PRINT_SERIAL) {
-    Serial.print("Temperature: ");
+    Serial.print("OneWireTemperature: ");
     Serial.println(oneWireTemperature);
   }
 #endif
 
-  digitalWrite(THERMISTOR_VCC_PIN, turn_On);
-  delay(50);
-  int analogReading = 0;
-  for (int i=0; i < 5; i++) {
-    analogReading = analogReading + analogRead(THERMISTORPIN);
-  }
-  analogReading = analogReading/5;
+  // digitalWrite(THERMISTOR_VCC_PIN, turn_On);
+  // delay(50);
+  // int analogReading = 0;
+  // for (int i=0; i < 5; i++) {
+  //   analogReading = analogReading + analogRead(THERMISTORPIN);
+  // }
+  // analogReading = analogReading/5;
  
-  digitalWrite(THERMISTOR_VCC_PIN, turn_Off);
+  // digitalWrite(THERMISTOR_VCC_PIN, turn_Off);
+  uint16_t analogReading = mcp1.analogRead(0);
+
   createMetric(metrics, "AnalogReading", analogReading);
   if(DEBUG_PRINT_SERIAL) {
     Serial.print("Analog Reading: ");
     Serial.println(analogReading);
   }
 
-  float readingVoltage = analogReading * (VOLTAGE / ADC_MAX);
+  if(analogReading == ADC_MAX) {
+    if(DEBUG_PRINT_SERIAL) {
+      Serial.println("No thermistor connected.");
+    }
+    return doc;
+  }
+
+  float readingVoltage = (analogReading * (VOLTAGE / ADC_MAX));
   createMetric(metrics, "ReadingVoltage", readingVoltage);
   if(DEBUG_PRINT_SERIAL) {
     Serial.print("Reading Voltage: ");
@@ -201,25 +238,39 @@ DynamicJsonDocument readAndAdjust() {
     Serial.println(readingResistance);
   }
 
-  float bCoefficientTemperature = bCoefficient(THERMISTORNOMINAL, TEMPERATURENOMINAL, BCOEFFICIENT, readingResistance);
+  float correctedResistance = readingResistance + RESISTANCE_CORRECTION;
+  createMetric(metrics, "CorrectedResistance", correctedResistance);
+  if(DEBUG_PRINT_SERIAL) {
+    Serial.print("Corrected Resistance: ");
+    Serial.println(correctedResistance);
+  }
+
+  float bCoefficientTemperature = bCoefficient(THERMISTORNOMINAL, TEMPERATURENOMINAL, BCOEFFICIENT, correctedResistance);
   createMetric(metrics, "BCoefficientTemperature", bCoefficientTemperature);
   if(DEBUG_PRINT_SERIAL) {
     Serial.print("B Coefficient Temperature: ");
     Serial.println(bCoefficientTemperature);
   }
 
-  float steinhartHartTemperature = steinhart.toTemperature(readingResistance);
+  float steinhartHartTemperature = steinhart.toTemperature(correctedResistance);
   createMetric(metrics, "SteinhartHartTemperature", steinhartHartTemperature);
   if(DEBUG_PRINT_SERIAL) {
     Serial.print("Steinhart Hart Temperature: ");
     Serial.println(steinhartHartTemperature);
- }
+  }
 
-  createMetric(metrics, "Mode", modeNames[StoreData.currentMode]);
+  float temperature = steinhartHartTemperature + TEMPERATURE_CORRECTION;
+  createMetric(metrics, "Temperature", temperature);
+  if(DEBUG_PRINT_SERIAL) {
+    Serial.print("Temperature: ");
+    Serial.println(temperature);
+  }
+
   if(DEBUG_PRINT_SERIAL) {
     Serial.print("Current Mode: ");
     Serial.println(modeNames[StoreData.currentMode]);
   }
+  createMetric(metrics, "Mode", modeNames[StoreData.currentMode]);
 
   createMetric(metrics, "FixedTemp", StoreData.fixedTemp);
   if(DEBUG_PRINT_SERIAL) {
@@ -233,7 +284,7 @@ DynamicJsonDocument readAndAdjust() {
     Serial.println(StoreData.offsetTemp);
   }
 
-  float targetTemperature = calculateTargetTemperature(steinhartHartTemperature);
+  float targetTemperature = calculateTargetTemperature(temperature);
   createMetric(metrics, "TargetTemperature", targetTemperature);
   if(DEBUG_PRINT_SERIAL) {
     Serial.print("Target Temperature: ");
@@ -281,9 +332,7 @@ float calculateTargetTemperature(float temperature) {
     case OFFSET:
       return temperature + StoreData.offsetTemp;
     case OFFSET_WITH_MAX:
-      if(temperature >= StoreData.fixedTemp) {
-        return temperature;
-      }else if(temperature + StoreData.offsetTemp >= StoreData.fixedTemp) {
+      if(temperature + StoreData.offsetTemp >= StoreData.fixedTemp) {
         return StoreData.fixedTemp;
       } else {
         return temperature + StoreData.offsetTemp;

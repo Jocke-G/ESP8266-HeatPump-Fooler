@@ -25,7 +25,11 @@ void EasyNet::configureWifi(String ssid, String password, String hostname) {
     Serial.println("Configuring WiFi");
     Serial.printf("  MAC:         %s\n", WiFi.macAddress().c_str());
     Serial.printf("  SSID:        %s\n", this->ssid.c_str());
+#if defined(ESP32)
+    Serial.printf("  Hostname:    %s\n", WiFi.getHostname());
+#elif defined(ESP8266)
     Serial.printf("  Hostname:    %s\n", WiFi.hostname());
+#endif
     Serial.printf("  AutoConnect: %s\n", WiFi.getAutoConnect() ? "true" : "false");
   }
 }
@@ -34,7 +38,7 @@ void EasyNet::connectWifi() {
   if(this->logging) {
     Serial.println("Trying to connect to WiFi");
   }
-  WiFi.begin(this->ssid, this->wifiPassword);
+  WiFi.begin(this->ssid.c_str(), this->wifiPassword.c_str());
 }
 
 void EasyNet::loop() {
@@ -80,7 +84,11 @@ void EasyNet::loopMqtt() {
   mqtt.loop();
 }
 
+#if defined(ESP32)
+WiFiClass EasyNet::getWifi() {
+#elif defined(ESP8266)
 ESP8266WiFiClass EasyNet::getWifi() {
+#endif
   return WiFi;
 }
 
