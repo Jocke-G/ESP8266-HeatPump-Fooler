@@ -8,10 +8,9 @@ This project comes with NO WARRANTY OF ANY KIND
 
 ## Bill of Material
 
-Wemos D1 Mini (ESP8266)
-OR
+Wemos D1 Mini (ESP8266) OR [ESP32](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/hw-reference/esp32/get-started-devkitc.html)
 
-[ESP32](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/hw-reference/esp32/get-started-devkitc.html)
+Flash using board `ESP32 Wrover Kit (all versions)`. NOTE: Did have to rollback to ESP32 version 2.0.17, or net library crash.
 
 NTC 150 Thermistor
 MCP4151-502E/P Digital Potentiometer
@@ -60,6 +59,8 @@ Topic: HeatpumpFooler/DCMD
 [ArduinoJson.h](https://www.arduino.cc/reference/en/libraries/arduinojson/) [Official Webpage](https://arduinojson.org/)
 
 [PubSubClient.h](https://www.arduino.cc/reference/en/libraries/pubsubclient/) [Git repo](https://github.com/knolleary/pubsubclient) [Official Webpage](https://pubsubclient.knolleary.net/api)
+
+[MCP_ADC by RobTillaart](https://github.com/RobTillaart/MCP_ADC) 0.5.1
 
 https://www.arduino.cc/reference/en/libraries/esp_eeprom/
 https://github.com/jwrw/ESP_EEPROM

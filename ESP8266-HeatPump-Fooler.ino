@@ -116,7 +116,7 @@ void setup() {
     Serial.println("Getting from EEPROM");
   }
 
-  mcp1.selectVSPI();
+  SPI.begin();
   mcp1.begin(ADC_CS_PIN);
   mcp1.setSPIspeed(4000000);
 
@@ -209,7 +209,7 @@ DynamicJsonDocument readAndAdjust() {
   // analogReading = analogReading/5;
  
   // digitalWrite(THERMISTOR_VCC_PIN, turn_Off);
-  uint16_t analogReading = mcp1.analogRead(0);
+  uint16_t analogReading = mcp1.read(0);
 
   createMetric(metrics, "AnalogReading", analogReading);
   if(DEBUG_PRINT_SERIAL) {
